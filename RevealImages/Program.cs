@@ -1,4 +1,6 @@
-﻿public class FileProcessor
+﻿using System.Runtime.InteropServices;
+
+public class FileProcessor
 {
     public static void Main(string[] args)
     {
@@ -38,40 +40,55 @@
     public static void ProcessFile(string path)
     {
         Console.WriteLine(path);
-        int hexIn;
-        String hex;
-        int position = -1;
-        byte[] file = File.ReadAllBytes(path);
+        var file = new Span<byte>(File.ReadAllBytes(path));
         string filename = Path.GetFileName(path);
         string directory = Path.GetDirectoryName(path);
+        var magicNumber = file.Slice(0, 4);
 
-        for (int i = 0; i < file.Length; i++)
+        if (!filename.Contains(".header") && System.Text.Encoding.Default.GetString(magicNumber) == "DSRW")
         {
-            hexIn = file[i];
-            hex = string.Format("{0:X2}", hexIn);
-            if (position > 0)
+            var numberOfImagesSlice = file.Slice(4, 4);
+            numberOfImagesSlice.Reverse();
+            var numberOfImages = BitConverter.ToInt32(numberOfImagesSlice);
+            var headerStartSlice = file.Slice(8, 4);
+            var headerStart = BitConverter.ToInt32(headerStartSlice);
+
+            var filesStartSlice = file.Slice(12, 4);
+            var filesStart = BitConverter.ToInt32(filesStartSlice);
+
+            var headerFile = file.Slice(0, filesStart);
+            ByteArrayToFile(directory + "/" + filename + ".header", headerFile);
+
+            List<int> filesPositions = new();
+            for (var i = 0; i < numberOfImages * 4; i=i+4)
             {
-                if (hex == "44")
+                var positionSlice = file.Slice(headerStart + i, 4);
+                var position = BitConverter.ToInt32(positionSlice);
+                filesPositions.Add(position);
+
+            }
+
+            Console.WriteLine("positions " + filesPositions.Count);
+
+            for (int i = 0; i < filesPositions.Count; i++)
+            {
+                var fileStart = filesStart + filesPositions[i];
+                int fileEnd;
+                if (i == filesPositions.Count - 1)
                 {
-                    byte[] header = SliceArray(file, 0, position - 1);
-                    byte[] image = SliceArray(file, position, file.Length - position);
-                    ByteArrayToFile(directory + "/" + filename + ".header.bin", header);
-                    ByteArrayToFile(directory + "/" + filename + ".dds", image);
-                    break;
+                    fileEnd = file.Length;
+
                 }
                 else
                 {
-                    position = -1;
+                    fileEnd = filesStart + filesPositions[i + 1];
+
                 }
-            }
-            else
-            {
-                if (hex == "44")
-                {
-                    position = i;
-                }
+                var fileSplit = file.Slice(fileStart, fileEnd - fileStart);
+                ByteArrayToFile(directory + "/" + filename + "." + i + ".dds", fileSplit);
             }
         }
+        
     }
 
     public static byte[] SliceArray(byte[] data, int index, int length)
@@ -81,6 +98,22 @@
         return result;
     }
 
+    public static bool ByteArrayToFile(string fileName, ReadOnlySpan<byte> byteArray)
+    {
+        try
+        {
+            using (var fs = new FileStream(fileName, FileMode.Create, FileAccess.Write))
+            {
+                fs.Write(byteArray);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Exception caught in process: {0}", ex);
+            return false;
+        }
+    }
     public static bool ByteArrayToFile(string fileName, byte[] byteArray)
     {
         try
